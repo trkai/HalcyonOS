@@ -3,6 +3,7 @@ import sys
 import requests
 import random
 import string
+from datetime import datetime
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -15,6 +16,9 @@ if hasattr(sys.stderr, 'reconfigure'):
     except Exception:
         pass
 
+MSG_ID_FILE = "/tmp/telegram_msg_id.txt"
+BUILD_ID_FILE = "/tmp/telegram_build_id.txt"
+
 def read_file_if_exists(path, default=""):
     if os.path.exists(path):
         try:
@@ -25,6 +29,19 @@ def read_file_if_exists(path, default=""):
             return default
     return default
 
+def save_to_env_and_file(env_key, file_path, value):
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(str(value).strip())
+    except Exception:
+        pass
+    if "GITHUB_ENV" in os.environ:
+        try:
+            with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+                f.write(f"{env_key}={value}\n")
+        except Exception:
+            pass
+
 def get_status_info(status):
     status = status.lower()
     if status == 'start': return "🚀", "START", "Đang thiết lập môi trường build..."
@@ -34,30 +51,13 @@ def get_status_info(status):
     if status == 'pack': return "🗜️", "PACK", "Đang nén thành flashable zip..."
     if status == 'upload': return "☁️", "UPLOAD", "Đang upload lên Cloud..."
     if status == 'success': return "✅", "SUCCESS", "Build hoàn tất thành công!"
-    if status == 'fail': 
+    if status == 'fail':
         err_msg = read_file_if_exists("bin/ddevice/error_msg.txt")
         desc = err_msg if err_msg else "Build bị dừng lại. Kiểm tra GitHub logs để biết chi tiết."
         return "❌", "FAILED", desc
     return "ℹ️", "UPDATE", status.upper()
 
-def get_progress_bar(status):
-    stages = ['start', 'download', 'unpack', 'build', 'pack', 'upload', 'success']
-    status = status.lower()
-    if status == 'fail':
-        return "[❌ Build thất bại]"
-    
-    current_index = -1
-    if status in stages:
-        current_index = stages.index(status)
-        
-    total = len(stages)
-    filled = current_index + 1 if current_index >= 0 else 0
-    bar = "▰" * filled + "▱" * (total - filled)
-    percent = int((filled / total) * 100)
-    return f"[{bar}] {percent}%"
-
 def get_progress_percent(status):
-    """Tính % tiến độ dựa trên status"""
     stages = {
         'start': 15,
         'download': 30,
@@ -69,41 +69,31 @@ def get_progress_percent(status):
     }
     return stages.get(status.lower(), 0)
 
-def is_available(val):
-    return val and val.strip() and val.lower() != 'không tìm thấy key' and 'not found' not in val.lower()
-
-def send_notification(status, repo_name, rom_link, channel_id, bot_token, msg_id, build_id, builder_name, builder_id):
-    from datetime import datetime
-    
+def send_notification(status, repo_name, rom_link, target_chat_id, bot_token, msg_id, build_id, builder_name):
     icon, status_title, status_desc = get_status_info(status)
-    action_url = f"https://github.com/{repo_name}/actions"
-    
+
     device_name = read_file_if_exists("bin/ddevice/device_name.txt", "Thiết bị")
     codename = read_file_if_exists("bin/ddevice/device_code.txt")
-    if not codename: codename = read_file_if_exists("bin/ddevice/device_f.txt", "unknown")
+    if not codename:
+        codename = read_file_if_exists("bin/ddevice/device_f.txt", "unknown")
     version_rom = read_file_if_exists("bin/ddevice/base_rom_code.txt")
-    if not version_rom: version_rom = read_file_if_exists("bin/ddevice/base_build_id.txt", "Unknown")
-    output_zip = read_file_if_exists("bin/ddevice/output_zip.txt")
+    if not version_rom:
+        version_rom = read_file_if_exists("bin/ddevice/base_build_id.txt", "Unknown")
 
-    builder_text = builder_name if builder_name else "HalcyonOS System"
     progress_percent = get_progress_percent(status)
-    
-    # Status badge colors
+
     status_color = "✅" if status.lower() == 'success' else "⏳" if status.lower() in ['start', 'download', 'unpack', 'build', 'pack', 'upload'] else "❌"
     status_label = "Hoàn tất" if status.lower() == 'success' else "Đang tiến hành" if status.lower() != 'fail' else "Thất bại"
-    
-    # Progress bar with filled blocks
+
     progress_blocks = int(progress_percent / 10)
     progress_bar_visual = "▰" * progress_blocks + "▱" * (10 - progress_blocks)
-    
-    # Time
+
     now = datetime.now()
     time_str = now.strftime("%H:%M · %d/%m")
-    
-    # Message content - format theo hình
+
     lines = [
         f"<b>HalcyonOS - ROM Builder</b>",
-        f"│{codename} · {device_name}",
+        f"│{codename}",
         f"│{version_rom}",
         "",
         f"{status_color} <b>{status_label}</b>",
@@ -116,67 +106,66 @@ def send_notification(status, repo_name, rom_link, channel_id, bot_token, msg_id
     ]
 
     message = "\n".join(lines)
-    
-    # Delete old progress message if build is complete (success or fail)
-    if status.lower() in ['success', 'fail'] and msg_id:
-        try:
-            delete_url = f"https://api.telegram.org/bot{bot_token}/deleteMessage"
-            delete_payload = {"chat_id": channel_id, "message_id": msg_id}
-            requests.post(delete_url, json=delete_payload)
-            print(f"✅ Xóa message tiến trình cũ (ID: {msg_id})")
-        except Exception as e:
-            print(f"⚠️  Lỗi xóa message cũ: {e}")
-    
-    # Inline buttons for success status
+
+    # Nút bấm khi hoàn tất (callback_data khớp với approve_rom_ trên Cloudflare Worker)
     reply_markup = None
     if status.lower() == 'success':
         reply_markup = {
             "inline_keyboard": [
                 [
-                    # Thay link thư mục Google Drive mới của bạn vào thuộc tính "url" bên dưới:
                     {"text": "📥 Tải ROM", "url": "https://drive.google.com/drive/folders/1AeAHmwsEFmBLqFJuLC6K0KEpTM4KoQR8?usp=sharing"},
-                    {"text": "🔍 Duyệt", "callback_data": "duyetrom"}
+                    {"text": "🔍 Duyệt", "callback_data": f"approve_rom_{build_id}"}
                 ]
             ]
         }
 
-    # Send new message (always send new when build complete, don't edit)
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        "chat_id": channel_id, 
-        "text": message, 
-        "parse_mode": "HTML", 
+    # 1. Nếu đã có msg_id -> Sửa thẳng vào tin nhắn cũ (editMessageText)
+    if msg_id:
+        edit_url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
+        edit_payload = {
+            "chat_id": target_chat_id,
+            "message_id": int(msg_id),
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+        if reply_markup:
+            edit_payload["reply_markup"] = reply_markup
+
+        try:
+            res = requests.post(edit_url, json=edit_payload)
+            res_json = res.json()
+            if res.status_code == 200 and res_json.get("ok"):
+                print(f"✅ Đã cập nhật tiến trình vào tin nhắn (ID: {msg_id})")
+                return
+            elif "message is not modified" in res_json.get("description", "").lower():
+                print("ℹ️ Nội dung tin nhắn không thay đổi, bỏ qua.")
+                return
+            else:
+                print(f"⚠️ Không sửa được tin nhắn cũ ({res_json.get('description')}), sẽ gửi tin nhắn mới...")
+        except Exception as e:
+            print(f"⚠️ Lỗi khi sửa tin nhắn cũ: {e}")
+
+    # 2. Nếu chưa có msg_id (bước start) hoặc sửa lỗi -> Gửi tin nhắn mới
+    send_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    send_payload = {
+        "chat_id": target_chat_id,
+        "text": message,
+        "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
-    
     if reply_markup:
-        payload["reply_markup"] = reply_markup
+        send_payload["reply_markup"] = reply_markup
 
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(send_url, json=send_payload)
         response.raise_for_status()
         res_data = response.json()
         new_msg_id = res_data.get('result', {}).get('message_id')
-        
-        if new_msg_id and "GITHUB_ENV" in os.environ:
-            with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
-                f.write(f"TELEGRAM_MSG_ID={new_msg_id}\n")
-        
-        print(f"✅ Gửi notification thành công")
-            
-        if status.lower() in ['success', 'fail'] and builder_id:
-            pm_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-            if status.lower() == 'success':
-                pm_text = f"<b>✅ BUILD THÀNH CÔNG!</b>\n\n{message}"
-            else:
-                pm_text = f"<b>❌ BUILD THẤT BẠI!</b>\n\n{message}\n\nKiểm tra GitHub logs để biết chi tiết."
-            pm_payload = {"chat_id": builder_id, "text": pm_text, "parse_mode": "HTML", "disable_web_page_preview": True}
-            try: 
-                requests.post(pm_url, json=pm_payload)
-                print(f"✅ Gửi PM cho builder thành công")
-            except Exception: 
-                pass
 
+        if new_msg_id:
+            save_to_env_and_file("TELEGRAM_MSG_ID", MSG_ID_FILE, new_msg_id)
+        print(f"✅ Gửi notification mới thành công (ID: {new_msg_id})")
     except Exception as e:
         print(f"❌ Lỗi gửi notification: {e}")
 
@@ -190,17 +179,20 @@ if __name__ == "__main__":
     prefix = sys.argv[4] if len(sys.argv) > 4 else "build"
     builder_name = sys.argv[5] if len(sys.argv) > 5 else ""
     builder_id = sys.argv[6] if len(sys.argv) > 6 else ""
-    
+
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     channel_id = os.environ.get("TELEGRAM_CHANNEL_ID")
-    msg_id = os.environ.get("TELEGRAM_MSG_ID") 
-    build_id = os.environ.get("TELEGRAM_BUILD_ID")
+
+    # Ưu tiên gửi về builder_id (nếu có), nếu không thì gửi về TELEGRAM_CHANNEL_ID (đặt là ID cá nhân của bạn trên GitHub)
+    target_chat_id = builder_id.strip() if builder_id and builder_id.strip() else channel_id
+
+    # Đọc msg_id và build_id từ file tạm hoặc biến môi trường
+    msg_id = read_file_if_exists(MSG_ID_FILE) or os.environ.get("TELEGRAM_MSG_ID")
+    build_id = read_file_if_exists(BUILD_ID_FILE) or os.environ.get("TELEGRAM_BUILD_ID")
 
     if not build_id:
         build_id = f"{prefix}_{''.join(random.choices(string.digits, k=8))}"
-        if "GITHUB_ENV" in os.environ:
-            with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
-                f.write(f"TELEGRAM_BUILD_ID={build_id}\n")
+        save_to_env_and_file("TELEGRAM_BUILD_ID", BUILD_ID_FILE, build_id)
 
-    if bot_token and channel_id:
-        send_notification(status, repo_name, rom_link, channel_id, bot_token, msg_id, build_id, builder_name, builder_id)
+    if bot_token and target_chat_id:
+        send_notification(status, repo_name, rom_link, target_chat_id, bot_token, msg_id, build_id, builder_name)
