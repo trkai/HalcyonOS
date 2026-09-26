@@ -4,7 +4,7 @@ RCLONE_CONFIG_1DRIVE="$work_dir/rclone.conf"
 
 # Cấu hình Google Drive 
 GDRIVE_REMOTE="rclone"
-GDRIVE_FOLDER="HalcyonOS_Releases" 
+GDRIVE_FOLDER_ID="1AeAHmwsEFmBLqFJuLC6K0KEpTM4KoQR8" 
 
 os_type=$(cat $work_dir/bin/ddevice/os_type.txt)
 base_rom_code=$(cat $work_dir/bin/ddevice/base_rom_code.txt)
@@ -81,7 +81,8 @@ uploaddir=$true_os
 
 # Upload thẳng lên Google Drive (Đã tối ưu rclone chống kẹt 100%)
 upload "Uploading to Google Drive..."
-rclone -v --config="$RCLONE_CONFIG_1DRIVE" copy "$output_file" "$GDRIVE_REMOTE:$GDRIVE_FOLDER/${uploaddir}/${polyxver}/${device_code}/" \
+rclone -v --config="$RCLONE_CONFIG_1DRIVE" copy "$output_file" "$GDRIVE_REMOTE:" \
+    --drive-root-folder-id "$GDRIVE_FOLDER_ID" \
     --drive-chunk-size 128M \
     --tpslimit 4 \
     --retries 3 \
