@@ -133,7 +133,8 @@ def send_notification(status, repo_name, rom_link, channel_id, bot_token, msg_id
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "📥 Tải ROM", "url": "https://drive.google.com/drive/folders/1ZIHQhj327XFhQP3Je-2WtKUBRruxAfLT?usp=sharing"},
+                    # Thay link thư mục Google Drive mới của bạn vào thuộc tính "url" bên dưới:
+                    {"text": "📥 Tải ROM", "url": "https://drive.google.com/drive/folders/1AeAHmwsEFmBLqFJuLC6K0KEpTM4KoQR8?usp=sharing"},
                     {"text": "🔍 Duyệt", "callback_data": "duyetrom"}
                 ]
             ]
